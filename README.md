@@ -3,6 +3,25 @@ Fashion Product Images (Small) is a Kaggle dataset of about 44,000 color product
 
 Dataset: https://www.kaggle.com/datasets/paramaggarwal/fashion-product-images-small
 
+## Installation
+With the virtual environment active, install the dependencies:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+On Windows, this installs PyTorch **without GPU support**, because that is the default build on PyPI. With an NVIDIA GPU, install the CUDA build first and then run the command above:
+
+```powershell
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+```
+
+To check that PyTorch sees the GPU (it should print `True`):
+
+```powershell
+python -c "import torch; print(torch.cuda.is_available())"
+```
+
 ## Targets
 The models predict three columns of styles.csv:
 
