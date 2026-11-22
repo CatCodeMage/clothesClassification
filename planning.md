@@ -38,3 +38,7 @@ Plots:
 
 ### Inference
 In each model, extract its features and predict. Make inference in web dashboard.
+
+## Decisions
+- Feature extractor: torchvision ResNet18 (BSD-3, ImageNet weights) with the last layer removed, giving 512 features per image; images are padded to 224x224 with white instead of cropped.
+- Targets: subCategory, articleType and baseColour. The split is stratified by articleType, which almost always fixes subCategory.
