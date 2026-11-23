@@ -6,7 +6,7 @@ extracts 512-dimensional visual feature vectors using feature_extractor.py,
 and saves the resulting feature vectors and dataset features as compressed .npz files
 inside the 'features' directory.
 
-By default it processes only the train split created by splitData.py.
+By default it processes the train, test and validation splits created by splitData.py.
 
 All metadata features from styles.csv are preserved, with specific emphasis on
 the three targets we will predict:
@@ -30,9 +30,9 @@ from tqdm import tqdm
 
 from feature_extractor import ResNet18FeatureExtractor, preprocess_image
 
-DEFAULT_CSV_PATH = "dataset/train/styles.csv"
-DEFAULT_IMAGES_DIR = "dataset/train/images"
-DEFAULT_OUTPUT_DIR = "features/train"
+DEFAULT_DATASET_DIR = "dataset"
+DEFAULT_OUTPUT_DIR = "features"
+DATASET_SPLITS = {"train": "train", "test": "test", "validation": "validate"}
 
 # Metadata columns present in styles.csv
 METADATA_COLUMNS = [
@@ -137,8 +137,13 @@ def metadata_to_arrays(batch: Dict[str, Any]) -> Dict[str, np.ndarray]:
     return arrays
 
 
-def save_consolidated(output_dir: Path, all_features: List[np.ndarray], all_metadata: Dict[str, List[np.ndarray]]) -> None:
-    consolidated_path = output_dir / "features_all.npz"
+def save_consolidated(
+    output_dir: Path,
+    all_features: List[np.ndarray],
+    all_metadata: Dict[str, List[np.ndarray]],
+    output_name: str = "features_all.npz",
+) -> None:
+    consolidated_path = output_dir / output_name
     print(f"Consolidating all batches into {consolidated_path}...")
     merged_features = np.concatenate(all_features, axis=0)
 
@@ -152,8 +157,8 @@ def save_consolidated(output_dir: Path, all_features: List[np.ndarray], all_meta
 
 
 def extract_features_in_batches(
-    csv_path: str = DEFAULT_CSV_PATH,
-    images_dir: str = DEFAULT_IMAGES_DIR,
+    csv_path: str = "dataset/train/styles.csv",
+    images_dir: str = "dataset/train/images",
     output_dir: str = DEFAULT_OUTPUT_DIR,
     batch_size: int = 64,
     device_name: Optional[str] = None,
@@ -161,6 +166,7 @@ def extract_features_in_batches(
     only_apparel: bool = False,
     consolidate: bool = True,
     num_workers: int = 0,
+    output_name: str = "features_all.npz",
 ) -> Path:
     """
     Extract ResNet-18 features in batches and save them into the output directory as .npz files.
@@ -176,8 +182,9 @@ def extract_features_in_batches(
         device_name: 'cuda', 'mps', 'cpu', or None for auto-detection
         max_samples: Optional maximum number of images to process (useful for testing)
         only_apparel: If True, only extracts items where masterCategory == 'Apparel'
-        consolidate: If True, also merges all batches into features_all.npz
+        consolidate: If True, saves all batches into one compressed .npz file
         num_workers: Number of workers for DataLoader
+        output_name: Name of the consolidated .npz file
 
     Returns:
         Path: Path to the output directory containing saved .npz files.
@@ -210,13 +217,9 @@ def extract_features_in_batches(
     print(f"Starting feature extraction for {len(dataset)} images in {len(dataloader)} batches...")
     print(f"Target features to guess: {', '.join(TARGET_COLUMNS)}")
 
-    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Extracting features")):
+    for batch in tqdm(dataloader, desc="Extracting features"):
         batch_features = extractor.extract_batch(batch["image"])
         batch_metadata = metadata_to_arrays(batch)
-
-        batch_data: Dict[str, np.ndarray] = {"features": batch_features, **batch_metadata}
-        add_target_keys(batch_data)
-        np.savez_compressed(output_dir / f"batch_{batch_idx:04d}.npz", **batch_data)
 
         if consolidate:
             all_features.append(batch_features)
@@ -224,33 +227,75 @@ def extract_features_in_batches(
                 all_metadata[col].append(values)
 
     if consolidate and all_features:
-        save_consolidated(output_dir, all_features, all_metadata)
+        save_consolidated(output_dir, all_features, all_metadata, output_name)
 
     print(f"Batch feature extraction complete! Files saved in: {output_dir.resolve()}")
     return output_dir
 
 
+def check_dataset_splits(dataset_dir: Path) -> None:
+    """Verify that every expected split contains styles.csv and an images folder."""
+    for split_dir_name in DATASET_SPLITS.values():
+        split_dir = dataset_dir / split_dir_name
+        csv_path = split_dir / "styles.csv"
+        images_dir = split_dir / "images"
+        if not split_dir.is_dir():
+            raise FileNotFoundError(f"Dataset split folder not found at: {split_dir}")
+        if not csv_path.is_file():
+            raise FileNotFoundError(f"Metadata file not found at: {csv_path}")
+        if not images_dir.is_dir():
+            raise FileNotFoundError(f"Images folder not found at: {images_dir}")
+
+
+def extract_all_splits(
+    dataset_dir: str = DEFAULT_DATASET_DIR,
+    output_dir: str = DEFAULT_OUTPUT_DIR,
+    batch_size: int = 64,
+    device_name: Optional[str] = None,
+    max_samples: Optional[int] = None,
+    only_apparel: bool = False,
+    consolidate: bool = True,
+    num_workers: int = 0,
+) -> Path:
+    """Extract all dataset splits and save one archive for each split."""
+    dataset_dir = Path(dataset_dir)
+    output_dir = Path(output_dir)
+    check_dataset_splits(dataset_dir)
+
+    for output_name, split_dir_name in DATASET_SPLITS.items():
+        split_dir = dataset_dir / split_dir_name
+        print(f"\nProcessing {split_dir_name} split...")
+        extract_features_in_batches(
+            csv_path=split_dir / "styles.csv",
+            images_dir=split_dir / "images",
+            output_dir=output_dir,
+            batch_size=batch_size,
+            device_name=device_name,
+            max_samples=max_samples,
+            only_apparel=only_apparel,
+            consolidate=consolidate,
+            num_workers=num_workers,
+            output_name=f"{output_name}.npz",
+        )
+
+    return output_dir
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Extract ResNet-18 features in batches from the dataset and save as .npz"
+        description="Extract ResNet-18 features from all dataset splits and save as .npz"
     )
     parser.add_argument(
-        "--csv-path",
+        "--dataset-dir",
         type=str,
-        default=DEFAULT_CSV_PATH,
-        help=f"Path to styles.csv file (default: {DEFAULT_CSV_PATH})",
-    )
-    parser.add_argument(
-        "--images-dir",
-        type=str,
-        default=DEFAULT_IMAGES_DIR,
-        help=f"Path to image directory (default: {DEFAULT_IMAGES_DIR})",
+        default=DEFAULT_DATASET_DIR,
+        help=f"Path to the dataset folder containing train, test and validate (default: {DEFAULT_DATASET_DIR})",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
         default=DEFAULT_OUTPUT_DIR,
-        help=f"Directory to save .npz feature files (default: {DEFAULT_OUTPUT_DIR})",
+        help=f"Directory to save the split .npz files (default: {DEFAULT_OUTPUT_DIR})",
     )
     parser.add_argument(
         "--batch-size",
@@ -276,11 +321,6 @@ def parse_args():
         help="Only extract features for apparel items (masterCategory == 'Apparel')",
     )
     parser.add_argument(
-        "--no-consolidate",
-        action="store_true",
-        help="Do not save the combined features_all.npz file",
-    )
-    parser.add_argument(
         "--num-workers",
         type=int,
         default=0,
@@ -291,15 +331,14 @@ def parse_args():
 
 def main():
     args = parse_args()
-    extract_features_in_batches(
-        csv_path=args.csv_path,
-        images_dir=args.images_dir,
+    extract_all_splits(
+        dataset_dir=args.dataset_dir,
         output_dir=args.output_dir,
         batch_size=args.batch_size,
         device_name=args.device,
         max_samples=args.max_samples,
         only_apparel=args.only_apparel,
-        consolidate=not args.no_consolidate,
+        consolidate=True,
         num_workers=args.num_workers,
     )
 
